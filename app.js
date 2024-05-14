@@ -25,8 +25,7 @@ app.use((err, req, res, next) => {
   res.status(status).json({ message });
 });
 
-const uri = process.env.DB_HOST;
-const port = process.env.PORT || 8000;
+const uri = process.env.DB_URI;
 
 // run server
 (async () => {
@@ -35,8 +34,8 @@ const port = process.env.PORT || 8000;
     await mongoose.connection.db.admin().command({ ping: 1 });
     console.log('Database connection successful');
 
-    app.listen(port, () => {
-      console.log(`Server is running. Use our API on port: ${port}`);
+    app.listen(8000, () => {
+      console.log(`Server is running. Use our API on port: 8000`);
     });
   } catch (error) {
     console.error(error);
