@@ -1,21 +1,23 @@
-import mongoose from 'mongoose';
-import app from './app.js';
-import 'dotenv/config';
+import mongoose from "mongoose";
+import app from "./app.js";
+import dotenv from "dotenv";
 
-const uri = process.env.DB_URI;
+dotenv.config();
+const { DB_URI } = process.env;
 
-// run server
-(async () => {
-  try {
-    await mongoose.connect(uri);
-    await mongoose.connection.db.admin().command({ ping: 1 });
-    console.log('Database connection successful');
+async function run() {
+    try {
+        await mongoose.connect(DB_URI);
 
-    app.listen(8000, () => {
-      console.log(`Server is running. Use our API on port: 8000`);
-    });
-  } catch (error) {
-    console.error(error);
-    process.exit(1);
-  }
-})();
+        app.listen(3000, () => {
+            console.log("Server is running. Use our API on port: 3000");
+        });
+
+        console.info("Database connection successful");
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
+
+}
+run().catch(err => console.error(err))

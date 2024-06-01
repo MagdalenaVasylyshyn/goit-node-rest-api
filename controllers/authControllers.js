@@ -1,117 +1,200 @@
-import usersService from '../services/authServices.js';
-import HttpError from '../helpers/HttpError.js';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import gravatar from 'gravatar';
-import path from 'node:path';
-import fs from 'node:fs/promises';
-import Jimp from 'jimp';
-import crypto from 'node:crypto';
-import ctrlWrapper from '../helpers/ctrlWrapper.js';
+import HttpError from "../helpers/HttpError.js";
+import bcrypt from "bcrypt";
+import { createEmailSchema, createRegisterSchema } from "../schemas/authSchemas.js";
+import User from "../models/authModel.js"
+import jwt from "jsonwebtoken";
+import gravatar from "gravatar";
+import nodemailer from "nodemailer";
+import dotenv from "dotenv";
 
-const register = async (req, res, next) => {
-  const { email, password } = req.body;
+dotenv.config();
+const { MAIL_PASSWORD, MAIL_USERNAME } = process.env
 
-  const existedUser = await usersService.get({ email });
+const transport = nodemailer.createTransport({
+    host: "imap.ukr.net",
+    port: 993,
+    auth: {
+        user: MAIL_USERNAME,
+        pass: MAIL_PASSWORD
+    }
+});
 
-  if (existedUser) throw HttpError(409, 'Email in use');
+export const register = async (req, res) => {
+    const { email, password } = req.body;
 
-  const hashPass = await bcrypt.hash(password, 12);
+    // checks if the user is registered
+    try {
+        const isUserAlreadyRegister = await User.findOne({ email });
+        if (isUserAlreadyRegister) {
+            return res.status(409).send({ message: HttpError(409).message });
+        }
+    } catch (err) {
+        return res.status(409).send({ message: HttpError(409).message });
+    }
 
-  const avatarURL = await gravatar.url(email);
 
-  const { subscription } = await usersService.add({
-    email,
-    password: hashPass,
-    avatarURL,
-  });
+    const { error } = createRegisterSchema.validate(req.body);
 
-  const resBody = { user: { email, subscription } };
+    if (error) {
+        return res.status(400).send({ message: HttpError(400).message });
+    }
 
-  res.status(201).json(resBody);
-};
+    const passwordHash = await bcrypt.hash(password, 10);
 
-const login = async (req, res, next) => {
-  const { email, password } = req.body;
-  const errorMessage = 'Email or password is wrong';
+    // add avatar
+    const avatarURL = gravatar.url(email, { s: 250, d: "identicon" }, true);
 
-  const user = await usersService.get({ email });
+    // send email
+    const verificationToken = crypto.randomUUID();
 
-  if (!user) throw HttpError(401, errorMessage);
+    transport.sendMail({
+        from: 'magdalena1403@ukr.net',
+        to: email,
+        subject: "Please, verify",
+        text: `Open the link to verify http://localhost:3000/api/users/verify/${verificationToken}`,
+        html: `<p>Open the link to verify</p> <a href="http://localhost:3000/api/users/verify/${verificationToken}">Link</a>`,
+    });
 
-  const isCorrectPass = await bcrypt.compare(password, user.password);
+    // create user
+    const user = {
+        email,
+        password: passwordHash,
+        avatarURL,
+        verificationToken,
+    }
 
-  if (!isCorrectPass) throw HttpError(401, errorMessage);
+    const newUser = await User.create(user);
+    res.status(201).send({ user: { email, subscription: newUser.subscription } });
+}
 
-  const token = jwt.sign({ id: user._id }, process.env.DB_SECRET, {
-    expiresIn: '23h',
-  });
+export const login = async (req, res) => {
+    const { email, password } = req.body;
 
-  await usersService.update({ id: user._id, token });
+    const { error } = createRegisterSchema.validate(req.body);
 
-  const resBody = {
-    token,
-    user: {
-      email,
-      subscription: user.subscription,
-    },
-  };
+    if (error) {
+        return res.status(400).send({ message: HttpError(400).message });
+    }
 
-  res.json(resBody);
-};
+    try {
+        const user = await User.findOne({ email });
 
-const logout = async (req, res, next) => {
-  const user = await usersService.get({ _id: req.user._id });
+        // check email
+        if (!user) {
+            return res.status(401).send({ message: HttpError(401, "Email or password is wrong").message });
+        }
 
-  if (!user) throw HttpError(401);
+        // check password 
+        const isRegistered = await bcrypt.compare(password, user.password);
+        if (!isRegistered) {
+            return res.status(401).send({ message: HttpError(401, "Email or password is wrong").message });
+        }
 
-  await usersService.update({ id: user._id, token: null });
+        // check is user verify
+        if (!user.verify) {
+            return res.status(401).send({ message: HttpError(401, "You are not verify").message });
+        }
 
-  res.status(204).end();
-};
+        // create token
 
-const current = async (req, res, next) => {
-  const { email, subscription } = req.user;
+        const payload = {
+            email,
+            password: user.password,
+            id: user._id
+        }
 
-  res.json({ email, subscription });
-};
+        const token = jwt.sign(payload, process.env.DB_SECRET, { expiresIn: "1d" });
 
-const updateSubscription = async (req, res, next) => {
-  const { email, subscription } = await usersService.update({
-    id: req.user._id,
-    subscription: req.body.subscription,
-  });
+        const newUser = await User.findByIdAndUpdate({ _id: user._id }, { token });
 
-  const resBody = { user: { email, subscription } };
+        res.status(200).send({ user: { email: newUser.email, subscription: newUser.subscription }, token });
+    } catch (err) {
+        res.status(401).send({ message: HttpError(401).message });
+    }
+}
 
-  res.json(resBody);
-};
+export const logout = async (req, res) => {
+    // errors are catching in authMiddleware.js
+    const authorizationHeader = req.headers.authorization.split(" ");
+    const token = authorizationHeader[1];
 
-const updateAvatar = async (req, res, next) => {
-  if (!req.file) throw HttpError(400, 'File not found!');
+    const data = jwt.decode(token);
 
-  const fileName = req.file.path;
-  const { _id: id } = req.user;
-  const newName = `${id}-${crypto.randomUUID()}${path.extname(fileName)}`;
+    await User.findByIdAndUpdate(data.id, { token: null });
 
-  const image = await Jimp.read(fileName);
-  image.resize(250, 250);
+    res.status(204).end()
+}
 
-  await image.writeAsync(path.resolve('public/avatars', newName));
-  await fs.unlink(fileName);
+export const current = async (req, res) => {
+    // errors are catching in authMiddleware.js
 
-  const { avatarURL } = await usersService.update({
-    id,
-    avatarURL: `/avatars/${newName}`,
-  });
-  res.json({ avatarURL });
-};
+    const authorizationHeader = req.headers.authorization.split(" ");
+    const token = authorizationHeader[1];
 
-export default {
-  register: ctrlWrapper(register),
-  login: ctrlWrapper(login),
-  logout: ctrlWrapper(logout),
-  current: ctrlWrapper(current),
-  updateSubscription: ctrlWrapper(updateSubscription),
-  updateAvatar: ctrlWrapper(updateAvatar),
-};
+    const data = jwt.decode(token);
+
+    const result = await User.findById(data.id);
+
+    res.status(200).send({ email: result.email });
+}
+
+export const verify = async (req, res) => {
+    const { verificationToken } = req.params;
+
+    try {
+        await User.findOneAndUpdate(
+            { verificationToken },
+            {
+                verificationToken: null,
+                verify: true,
+            },
+            { new: true }
+        );
+
+        res.status(200).send({ message: 'Verification successful' });
+    } catch (err) {
+        res.status(404).send({ message: HttpError(404, "User not found").message });
+    }
+}
+
+export const sendEmailAgain = async (req, res) => {
+    const { email } = req.body;
+
+    // checks if the email has been skipped
+    if (!email) {
+        return res.status(400).send({ message: HttpError(400, "Missing required field email").message });
+    }
+
+
+    // validate the email
+    const { error } = createEmailSchema.validate(req.body);
+
+    if (error) {
+        return res.status(400).send({ message: HttpError(400).message });
+    }
+
+    try {
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(400).send({ message: HttpError(400, "User are not registered").message });
+        }
+
+        if (user.verify) {
+            return res.status(400).send({ message: HttpError(400, "Verification has already been passed").message });
+        }
+
+        transport.sendMail({
+            from: 'magdalena1403@ukr.net',
+            to: email,
+            subject: "Please, verify",
+            text: `Open the link to verify http://localhost:3000/api/users/verify/${user.verificationToken}`,
+            html: `<p>Open the link to verify</p> <a href="http://localhost:3000/api/users/verify/${user.verificationToken}">Link</a>`,
+        });
+
+        res.status(200).send({ message: "Verification email sent" });
+    } catch (err) {
+        console.log(err);
+        res.status(400).send({ message: HttpError(400, "User are not registered").message });
+    }
+}

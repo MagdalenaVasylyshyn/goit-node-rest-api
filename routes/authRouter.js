@@ -1,40 +1,16 @@
-import express from 'express';
-import authCtrl from '../controllers/authControllers.js';
-import userSchemas from '../schemas/usersSchemas.js';
-import validateBody from '../helpers/validateBody.js';
-import authControl from '../middlewares/authControl.js';
-import uploadAvatar from '../middlewares/uploadAvatar.js';
+import express from "express";
+import { current, login, logout, register, sendEmailAgain, verify } from "../controllers/authControllers.js";
+import auth from "../middleware/authMiddleware.js";
 
-const usersRouter = express.Router();
+const authRouter = express.Router();
 
-usersRouter.post(
-  '/register',
-  validateBody(userSchemas.create, true),
-  authCtrl.register
-);
+const jsonParse = express.json();
 
-usersRouter.post(
-  '/login',
-  validateBody(userSchemas.create, true),
-  authCtrl.login
-);
+authRouter.post("/register", jsonParse, register);
+authRouter.post("/login", jsonParse, login);
+authRouter.post("/logout", auth, logout);
+authRouter.get("/current", auth, current);
+authRouter.get("/verify/:verificationToken", verify);
+authRouter.post("/verify", jsonParse, sendEmailAgain);
 
-usersRouter.post('/logout', authControl, authCtrl.logout);
-
-usersRouter.get('/current', authControl, authCtrl.current);
-
-usersRouter.patch(
-  '/',
-  authControl,
-  validateBody(userSchemas.updateSubscription),
-  authCtrl.updateSubscription
-);
-
-usersRouter.patch(
-  '/avatars',
-  authControl,
-  uploadAvatar.single('avatar'),
-  authCtrl.updateAvatar
-);
-
-export default usersRouter;
+export default authRouter;
