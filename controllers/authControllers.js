@@ -11,8 +11,9 @@ dotenv.config();
 const { MAIL_PASSWORD, MAIL_USERNAME } = process.env
 
 const transport = nodemailer.createTransport({
-    host: "imap.ukr.net",
-    port: 993,
+    host: "smtp.ukr.net",
+    port: 465,
+    secure: true,
     auth: {
         user: MAIL_USERNAME,
         pass: MAIL_PASSWORD
@@ -48,7 +49,7 @@ export const register = async (req, res) => {
     const verificationToken = crypto.randomUUID();
 
     transport.sendMail({
-        from: 'magdalena1403@ukr.net',
+        from: MAIL_USERNAME,
         to: email,
         subject: "Please, verify",
         text: `Open the link to verify http://localhost:3000/api/users/verify/${verificationToken}`,
@@ -185,7 +186,7 @@ export const sendEmailAgain = async (req, res) => {
         }
 
         transport.sendMail({
-            from: 'magdalena1403@ukr.net',
+            from: MAIL_USERNAME,
             to: email,
             subject: "Please, verify",
             text: `Open the link to verify http://localhost:3000/api/users/verify/${user.verificationToken}`,
